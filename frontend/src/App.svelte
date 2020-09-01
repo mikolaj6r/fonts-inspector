@@ -11,11 +11,6 @@
     return hash;
   }
 
-  function getFileName(string) {
-    const array = string.split("/");
-    return array[array.length - 1];
-  }
-
   const fontRuleRegex = /@font-face\s*{([\s\S]*?)}/g;
   const declarationsRegex = /(?<property>\S*?):\s*(?<value>[\s\S]+?)(?:;|$)/g;
 
@@ -25,22 +20,13 @@
   let inlineCSSResources = {};
   let foundDeclarations = {};
 
-  function inlineSourceClicked(event) {
-    const { index } = event.target.dataset;
-    chrome.devtools.inspectedWindow.eval(`inspect($$('style')[${index}])`);
-  }
-
-  function externalSourceClicked(event) {
-    const { url } = event.target.dataset;
-    chrome.devtools.panels.openResource(url);
-  }
 
   function callback() {
     chrome.devtools.inspectedWindow.eval(
-      `$$('link[rel="stylesheet"]').map(link => link.href)`,
-      function (links, isException) {
-        if (links.some((link) => !(link in externalCSSResources))) {
-          for (let link of links) {
+      `values({ elements: $$('style').map(el => el.textContent), external: $$('link[rel="stylesheet"]').map(link => link.href) })`,
+      function ([elements, external], isException) {
+        if (external.some((link) => !(link in externalCSSResources))) {
+          for (let link of external) {
             if (!(link in externalCSSResources)) {
               externalCSSResources[link] = link;
             }
@@ -71,17 +57,14 @@
                 });
             }
 
-            chrome.devtools.inspectedWindow.eval(
-              `$$('style').map(el => el.textContent)`,
-              function (styles, isException) {
                 if (
-                  styles.some((style) => {
+                  elements.some((style) => {
                     const hash = getHashCode(style);
 
                     return !(hash in inlineCSSResources);
                   })
                 ) {
-                  for (let style of styles) {
+                  for (let style of elements) {
                     const hash = getHashCode(style);
 
                     if (!(hash in inlineCSSResources)) {
@@ -92,7 +75,7 @@
                   const inlineStyles = [];
                   const fonts = [];
 
-                  for (let style of styles) {
+                  for (let style of elements) {
                     for (const [, declaration] of style.matchAll(
                       fontRuleRegex
                     )) {
@@ -115,20 +98,15 @@
                     foundDeclarations = foundDeclarations;
                   }
                 }
-              }
-            );
           });
         } else {
-          chrome.devtools.inspectedWindow.eval(
-            `$$('style').map(el => el.textContent)`,
-            function (styles, isException) {
               if (
-                styles.some((style) => {
+                elements.some((style) => {
                   const hash = getHashCode(style);
                   return !(hash in inlineCSSResources);
                 })
               ) {
-                for (let style of styles) {
+                for (let style of elements) {
                   const hash = getHashCode(style);
 
                   if (!(hash in inlineCSSResources)) {
@@ -139,7 +117,7 @@
                 const inlineStyles = [];
                 const fonts = [];
 
-                for (let style of styles) {
+                for (let style of elements) {
                   for (const [, declaration] of style.matchAll(fontRuleRegex)) {
                     const declarations = {};
                     for (const match of declaration.matchAll(
@@ -159,15 +137,87 @@
                   foundDeclarations = foundDeclarations;
                 }
               }
-            }
-          );
         }
       }
     );
   }
 
+
+  function getFileName(string) {
+    const array = string.split("/");
+    return array[array.length - 1];
+  }
+
+  function inlineSourceClicked(event) {
+    const { index } = event.target.dataset;
+    chrome.devtools.inspectedWindow.eval(`inspect($$('style')[${index}])`);
+  }
+
+  function externalSourceClicked(event) {
+    const { url } = event.target.dataset;
+    chrome.devtools.panels.openResource(url);
+  }
+
   callback();
 </script>
+
+<main>
+  {#if Object.keys(foundDeclarations).length > 0}
+    <ul>
+      {#each Object.entries(foundDeclarations) as [source, values], i}
+        <li>
+          {#if source == 'inline'}
+            {#each values as style, j}
+              <ul>
+                {#each style as font, k}
+                  <li class="font-list">
+                    font {'{'}<span
+                      class="inline-source-link"
+                      on:click={inlineSourceClicked}
+                      data-index={j}>style element</span>
+                    <ul class="font">
+                      {#each Object.entries(font) as [property, value], l}
+                        <li>
+                          <span class="property">{property}</span><span
+                            class="value-separator">:</span>{value};
+                        </li>
+                      {/each}
+                    </ul>
+                    {'}'}
+                  </li>
+                {/each}
+              </ul>
+            {/each}
+          {:else}
+            <ul>
+              {#each values as font, j}
+                <li class="font-list">
+                  font {'{'}
+                  <span
+                    class="inline-source-link"
+                    on:click={externalSourceClicked}
+                    data-url={source}>{getFileName(source)}</span>
+                  <ul class="font">
+                    {#each Object.entries(font) as [property, value], k}
+                      <li>
+                        <span class="property">{property}</span><span
+                          class="value-separator">:</span>{value};
+                      </li>
+                    {/each}
+                  </ul>
+                  {'}'}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </li>
+      {/each}
+    </ul>
+  {:else}
+  No registered fonts found.
+  {/if}
+</main>
+
 
 <style>
   main {
@@ -212,58 +262,3 @@
     text-decoration-color: hsl(0deg 0% 60%);
   }
 </style>
-
-<main>
-  {#if Object.keys(foundDeclarations).length > 0}
-    <ul>
-      {#each Object.entries(foundDeclarations) as [source, values], i}
-        <li>
-          {#if source == 'inline'}
-            {#each values as style, i}
-              <ul>
-                {#each style as font, i}
-                  <li class="font-list">
-                    font {'{'}<span
-                      class="inline-source-link"
-                      on:click={inlineSourceClicked}
-                      data-index={i}>style element</span>
-                    <ul class="font">
-                      {#each Object.entries(font) as [property, value], i}
-                        <li>
-                          <span class="property">{property}</span><span
-                            class="value-separator">:</span>{value};
-                        </li>
-                      {/each}
-                    </ul>
-                    {'}'}
-                  </li>
-                {/each}
-              </ul>
-            {/each}
-          {:else}
-            <ul>
-              {#each values as font, i}
-                <li class="font-list">
-                  font {'{'}
-                  <span
-                    class="inline-source-link"
-                    on:click={externalSourceClicked}
-                    data-url={source}>{getFileName(source)}</span>
-                  <ul class="font">
-                    {#each Object.entries(font) as [property, value], i}
-                      <li>
-                        <span class="property">{property}</span><span
-                          class="value-separator">:</span>{value};
-                      </li>
-                    {/each}
-                  </ul>
-                  {'}'}
-                </li>
-              {/each}
-            </ul>
-          {/if}
-        </li>
-      {/each}
-    </ul>
-  {/if}
-</main>
